@@ -1,0 +1,607 @@
+#include "fs.h"
+
+#include <string.h>
+
+#define FWDERR(x)                                \
+    {                                            \
+        int __res = (x);                         \
+        if (__res != FS_RESULT_OK) return __res; \
+    }
+
+#define FWDIOERR(x)                                           \
+    {                                                         \
+        int __res = (x);                                      \
+        if (__res != FS_RESULT_OK) return FS_RESULT_IO_ERROR; \
+    }
+
+FS_FUN_INLINE int fs_generic_read(
+    FILE* f, uint32_t offset, void* buff, uint32_t len)
+{
+    FWDIOERR(fseek(f, offset, SEEK_SET));
+    FWDIOERR(fread(buff, 1, len, f) != len);
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_generic_write(
+    FILE* f, uint32_t offset, const void* buff, uint32_t len)
+{
+    FWDIOERR(fseek(f, offset, SEEK_SET));
+    FWDIOERR(fwrite(buff, 1, len, f) != len);
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_read_superblock(FS_Volume* vol, FS_SuperBlock* sb)
+{
+    FWDIOERR(fs_generic_read(
+        vol->file_handle, 0, (uint8_t*)sb, sizeof(FS_SuperBlock)));
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_read_flt(
+    FS_Volume* vol, uint32_t index, FS_FLTEntry* value)
+{
+    const uint32_t offset =
+        vol->super_block.flt_offset + index * sizeof(FS_FLTEntry);
+    FWDIOERR(fs_generic_read(
+        vol->file_handle, offset, value, sizeof(FS_FLTEntry)));
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_write_flt(
+    FS_Volume* vol, uint32_t index, FS_FLTEntry value)
+{
+    const uint32_t offset =
+        vol->super_block.flt_offset + index * sizeof(FS_FLTEntry);
+    FWDIOERR(fs_generic_write(
+        vol->file_handle, offset, &value, sizeof(FS_FLTEntry)));
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_read_block(
+    FS_Volume* vol, uint32_t index, void* buff, uint32_t bytes)
+{
+    const uint32_t offset = vol->super_block.data_block_offset +
+                            index * vol->super_block.data_block_size;
+    FWDIOERR(fs_generic_read(vol->file_handle, offset, buff, bytes));
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_write_block(
+    FS_Volume* vol, uint32_t index, const void* buff, uint32_t bytes)
+{
+    const uint32_t offset = vol->super_block.data_block_offset +
+                            index * vol->super_block.data_block_size;
+    FWDIOERR(fs_generic_write(vol->file_handle, offset, buff, bytes));
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_clear_block(FS_Volume* vol, uint32_t index)
+{
+    const uint32_t erase_data = 0xffffffff;
+    const uint32_t offset = vol->super_block.data_block_offset +
+                            index * vol->super_block.data_block_size;
+    for (uint32_t i = 0; i < vol->super_block.data_block_size; i += 4)
+        FWDIOERR(fs_generic_write(vol->file_handle, offset, &erase_data, 4));
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_read_fileentry(
+    FS_Volume* vol, uint32_t block, uint32_t index, FS_FileEntry* entry)
+{
+    uint32_t offset = vol->super_block.data_block_offset +
+                      block * vol->super_block.data_block_size +
+                      index * sizeof(FS_FileEntry);
+    FWDIOERR(fs_generic_read(
+        vol->file_handle, offset, entry, sizeof(FS_FileEntry)));
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INLINE int fs_write_fileentry(
+    FS_Volume* vol, uint32_t block, uint32_t index, FS_FileEntry* entry)
+{
+    uint32_t offset = vol->super_block.data_block_offset +
+                      block * vol->super_block.data_block_size +
+                      index * sizeof(FS_FileEntry);
+    FWDIOERR(fs_generic_write(
+        vol->file_handle, offset, entry, sizeof(FS_FileEntry)));
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INTERNAL int fs_count_used_blocks(
+    FS_Volume* vol, uint32_t* used_blocks)
+{
+    uint32_t total_blocks = vol->super_block.flt_entry_count;
+    uint32_t count = 0;
+
+    for (uint32_t i = 0; i < total_blocks; i++)
+    {
+        uint32_t flt_entry;
+        FWDIOERR(fs_read_flt(vol, i, &flt_entry));
+        if (flt_entry != FS_FLT_FREE && flt_entry != FS_FLT_DELETED) count++;
+    }
+
+    *used_blocks = count;
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INTERNAL int fs_find_free_block(FS_Volume* vol, uint32_t* block)
+{
+    uint32_t total_blocks = vol->super_block.flt_entry_count;
+    for (uint32_t i = 0; i < total_blocks; i++)
+    {
+        uint32_t flt_entry;
+        FWDIOERR(fs_read_flt(vol, i, &flt_entry));
+        if (flt_entry == FS_FLT_FREE || flt_entry == FS_FLT_DELETED)
+        {
+            *block = i;
+            return FS_RESULT_OK;
+        }
+    }
+    return FS_RESULT_NO_SPACE;
+}
+
+FS_FUN_INTERNAL int fs_find_fileentry(
+    FS_Volume* vol, uint32_t* block, uint32_t* index, const char* name)
+{
+    const uint32_t entries_per_block =
+        vol->super_block.data_block_size / sizeof(FS_FileEntry);
+
+    uint32_t current_block = vol->super_block.root_block_index;
+
+    for (;;)
+    {
+        // Check all entries in the current block
+        for (uint32_t i = 0; i < entries_per_block; i++)
+        {
+            FS_FileEntry entry;
+            FWDIOERR(fs_read_fileentry(vol, current_block, i, &entry));
+
+            if (entry.magic != FS_FILEMAGIC_FILE) continue;
+
+            if (memcmp(entry.name, name, strlen(name)) == 0)
+            {
+                *block = current_block;
+                *index = i;
+                return FS_RESULT_OK;
+            }
+        }
+
+        // Get the next block in the root directory chain
+        uint32_t next_block;
+        FWDIOERR(fs_read_flt(vol, current_block, &next_block));
+
+        // Check for broken chain or end of chain
+        if (next_block == FS_FLT_END_OF_CHAIN) break;
+        if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+    }
+
+    return FS_RESULT_NOT_FOUND;
+}
+
+FS_FUN_INTERNAL int fs_create_fileentry(
+    FS_Volume* vol, uint32_t* block, uint32_t* index)
+{
+    const uint32_t entries_per_block =
+        vol->super_block.data_block_size / sizeof(FS_FileEntry);
+
+    uint32_t current_block = vol->super_block.root_block_index;
+
+    for (;;)
+    {
+        // Check all entries in the current block
+        for (uint32_t i = 0; i < entries_per_block; i++)
+        {
+            FS_FileEntry entry;
+            FWDIOERR(fs_read_fileentry(vol, current_block, i, &entry));
+
+            // If magic doesn't mark a file, we have an empty entry
+            if (entry.magic != FS_FILEMAGIC_FILE)
+            {
+                *block = current_block;
+                *index = i;
+                break;
+            }
+        }
+
+        // Get the next block in the root directory chain
+        uint32_t next_block;
+        FWDIOERR(fs_read_flt(vol, current_block, &next_block));
+
+        // Check for broken chain
+        if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+
+        // Allocate a new block if needed
+        if (next_block == FS_FLT_END_OF_CHAIN)
+        {
+            FWDERR(fs_find_free_block(vol, &next_block));
+            FWDIOERR(fs_clear_block(vol, next_block));
+            FWDIOERR(fs_write_flt(vol, current_block, next_block));
+        }
+    }
+
+    return FS_RESULT_OK;
+}
+
+FS_FUN_INTERNAL int fs_clear_flt_chain(FS_Volume* vol, uint32_t block)
+{
+    const uint32_t free_entry = FS_FLT_FREE;
+
+    for (;;)
+    {
+        // Read and clear the current FLT entry
+        uint32_t flt_entry;
+        FWDIOERR(fs_read_flt(vol, block, &flt_entry));
+        FWDIOERR(fs_write_flt(vol, block, FS_FLT_FREE));
+
+        vol->used_data_blocks--;
+
+        // Check if it was the last entry in the chain
+        if (flt_entry == FS_FLT_END_OF_CHAIN) break;
+
+        // Check for broken chain
+        if (flt_entry == FS_FLT_FREE || flt_entry == FS_FLT_DELETED)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+
+        // Move to the next block in the chain
+        block = flt_entry;
+    }
+
+    return FS_RESULT_OK;
+}
+
+// Creating and mounting volume
+FS_FUN_API int fs_volume_mount(FS_Volume* volume, const char* filepath)
+{
+    if (!volume || !filepath) return FS_RESULT_INVALID_PARAMETER;
+    FILE* f = fopen(filepath, "r+b");
+    if (!f) return FS_RESULT_MOUNT_ERROR;
+    volume->file_handle = f;
+
+    // Read superblock
+    int res = fs_read_superblock(volume, &volume->super_block);
+    if (res != FS_RESULT_OK)
+    {
+        fclose(f);
+        return res;
+    }
+
+    // Initialize other volume parameters
+    FWDERR(fs_count_used_blocks(volume, &volume->used_data_blocks));
+    FWDERR(fs_list_len(volume, &volume->file_entry_count));
+    FWDERR(fs_list_reset(volume));
+
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_volume_unmount(FS_Volume* volume)
+{
+    if (!volume || !volume->file_handle) return FS_RESULT_INVALID_PARAMETER;
+    fclose(volume->file_handle);
+    volume->file_handle = NULL;
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_volume_create(
+    const char* path, uint32_t block_size, uint32_t volume_bytes)
+{
+    const char* magic = FS_SUPERBLOCK_MAGIC;
+
+    // Check parameters
+    if (!path || block_size < sizeof(FS_FileEntry) ||
+        volume_bytes < sizeof(FS_SuperBlock) + block_size * 2)
+        return FS_RESULT_INVALID_PARAMETER;
+
+    // Check if the block size is a power of two
+    if ((block_size & (block_size - 1)) != 0)
+        return FS_RESULT_INVALID_PARAMETER;
+
+    // Create and open the file
+    FILE* f = fopen(path, "w+b");
+    if (!f) return FS_RESULT_MOUNT_ERROR;
+
+    // Clear the file
+    const uint32_t zero = 0xff;
+    for (uint32_t i = 0; i < volume_bytes / sizeof(uint32_t); i++)
+    {
+        if (fwrite(&zero, sizeof(uint32_t), 1, f) != 1)
+        {
+            fclose(f);
+            return FS_RESULT_IO_ERROR;
+        }
+    }
+
+    // Calculate volume parameters
+    const uint32_t flt_entry_count = (volume_bytes - sizeof(FS_SuperBlock)) /
+                                     (block_size + sizeof(FS_FLTEntry));
+    const uint32_t data_block_count = flt_entry_count;
+    const uint32_t flt_offset = sizeof(FS_SuperBlock);
+    const uint32_t data_block_offset =
+        flt_offset + flt_entry_count * sizeof(FS_FLTEntry);
+
+    // Create and write the superblock
+    FS_SuperBlock sb;
+    memcpy(sb.magic, magic, 8);
+    sb.data_block_size = block_size;
+    sb.flt_entry_count = flt_entry_count;
+    sb.data_block_count = data_block_count;
+    sb.flt_offset = flt_offset;
+    sb.data_block_offset = data_block_offset;
+    sb.root_block_index = 0;
+    if (fs_generic_write(f, 0, &sb, sizeof(FS_SuperBlock)) != FS_RESULT_OK)
+    {
+        fclose(f);
+        return FS_RESULT_IO_ERROR;
+    }
+
+    // Close the file and return
+    fclose(f);
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_file_size(
+    FS_Volume* volume, const char* filename, uint32_t* size_bytes)
+{
+    // Check parametters
+    if (!volume || !filename || !size_bytes)
+        return FS_RESULT_INVALID_PARAMETER;
+    uint32_t block, index;
+
+    // Find and read the file entry
+    FS_FileEntry entry;
+    FWDERR(fs_find_fileentry(volume, &block, &index, filename));
+    FWDIOERR(fs_read_fileentry(volume, block, index, &entry));
+
+    // Return the file size
+    *size_bytes = entry.data_byte_count;
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_file_read(FS_Volume* volume, const char* filename,
+    void* buffer, uint32_t buffer_size, uint32_t* bytes_read)
+{
+    // Check parameters
+    if (!volume || !filename || !buffer || !bytes_read)
+        return FS_RESULT_INVALID_PARAMETER;
+
+    // Find and read the file entry
+    FS_FileEntry entry;
+    uint32_t block, index;
+    FWDERR(fs_find_fileentry(volume, &block, &index, filename));
+    FWDIOERR(fs_read_fileentry(volume, block, index, &entry));
+
+    // Read the file data
+    uint32_t bytes_remaining = (buffer_size < entry.data_byte_count)
+                                   ? buffer_size
+                                   : entry.data_byte_count;
+    uint32_t current_block = entry.data_block_index;
+    *bytes_read = 0;
+
+    while (bytes_remaining > 0)
+    {
+        const uint32_t block_size = volume->super_block.data_block_size;
+        uint32_t chunk_size =
+            (bytes_remaining < block_size) ? bytes_remaining : block_size;
+
+        // Read a chunk and update counters
+        FWDIOERR(fs_read_block(
+            volume, current_block, (buffer + *bytes_read), chunk_size));
+        *bytes_read += chunk_size;
+        bytes_remaining -= chunk_size;
+
+        // Get the next block in the FLT chain
+        uint32_t next_block;
+        FWDIOERR(fs_read_flt(volume, current_block, &next_block));
+
+        if (next_block == FS_FLT_END_OF_CHAIN && bytes_remaining > 0)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+        if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+
+        current_block = next_block;
+    }
+
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_file_write(FS_Volume* volume, const char* filename,
+    const void* data, uint32_t data_size, uint32_t* bytes_written)
+{
+    // Check parameters
+    if (!volume || !filename || !data || !bytes_written)
+        return FS_RESULT_INVALID_PARAMETER;
+
+    // Check if the file exists
+    FS_FileEntry entry;
+    uint32_t block, index;
+    FWDERR(fs_find_fileentry(volume, &block, &index, filename));
+
+    // Check if there's enough space for the file
+    const uint32_t block_size = volume->super_block.data_block_size;
+    uint32_t required_blocks = data_size / block_size;
+    if (data_size % block_size != 0) required_blocks++;
+    required_blocks++;  // For safety, if we need to create a new entry
+    if (volume->used_data_blocks + required_blocks >
+        volume->super_block.data_block_count)
+        return FS_RESULT_NO_SPACE;
+
+    // Get the first empty block
+    uint32_t current_block;
+    fs_find_free_block(volume, &current_block);
+
+    // Create the entry
+    FWDERR(fs_create_fileentry(volume, &block, &index));
+    entry.magic = FS_FILEMAGIC_FILE;
+    memcpy(entry.name, filename, sizeof(entry.name));
+    entry.data_block_index = current_block;
+    entry.data_byte_count = data_size;
+    FWDIOERR(fs_write_fileentry(volume, block, index, &entry));
+
+    // Store the file
+    uint32_t bytes_remaining = (data_size < entry.data_byte_count)
+                                   ? data_size
+                                   : entry.data_byte_count;
+    *bytes_written = 0;
+    while (bytes_remaining > 0)
+    {
+        const uint32_t block_size = volume->super_block.data_block_size;
+        uint32_t chunk_size =
+            (bytes_remaining < block_size) ? bytes_remaining : block_size;
+
+        // Write a chunk and update counters
+        FWDIOERR(fs_write_block(
+            volume, current_block, (data + *bytes_written), chunk_size));
+        *bytes_written += chunk_size;
+        bytes_remaining -= chunk_size;
+
+        // If we stored the whole file, mark the end in FLT
+        if (!bytes_remaining)
+        {
+            FWDIOERR(
+                fs_write_flt(volume, current_block, FS_FLT_END_OF_CHAIN));
+            break;
+        }
+
+        // Find the next block and store it to FLT
+        uint32_t next_block;
+        FWDERR(fs_find_free_block(volume, &next_block));
+        FWDIOERR(fs_write_flt(volume, current_block, next_block));
+        current_block = next_block;
+    }
+
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_file_delete(FS_Volume* volume, const char* filename)
+{
+    // Check parameters
+    if (!volume || !filename) return FS_RESULT_INVALID_PARAMETER;
+    uint32_t block, index;
+
+    // Find and read the file entry
+    FS_FileEntry entry;
+    FWDERR(fs_find_fileentry(volume, &block, &index, filename));
+    FWDIOERR(fs_read_fileentry(volume, block, index, &entry));
+
+    // Clear the FLT chain (also updates the used block count)
+    FWDERR(fs_clear_flt_chain(volume, entry.data_block_index));
+
+    // Clear the file entry (we don't do any wear leveling)
+    memset(&entry, 0xff, sizeof(FS_FileEntry));
+    FWDIOERR(fs_write_fileentry(volume, block, index, &entry));
+    volume->file_entry_count--;
+
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_list_len(FS_Volume* volume, uint32_t* file_count)
+{
+    const uint32_t entries_per_block =
+        volume->super_block.data_block_size / sizeof(FS_FileEntry);
+    uint32_t current_block = volume->super_block.root_block_index;
+
+    *file_count = 0;
+    for (;;)
+    {
+        // Check all entries in the current block
+        for (uint32_t i = 0; i < entries_per_block; i++)
+        {
+            FS_FileEntry entry;
+            FWDIOERR(fs_read_fileentry(volume, current_block, i, &entry));
+
+            if (entry.magic == FS_FILEMAGIC_FILE) (*file_count)++;
+        }
+
+        // Get the next block in the root directory chain
+        uint32_t next_block;
+        FWDIOERR(fs_read_flt(volume, current_block, &next_block));
+
+        // Check for broken chain or end of chain
+        if (next_block == FS_FLT_END_OF_CHAIN) break;
+        if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+    }
+
+    return FS_RESULT_NOT_FOUND;
+}
+
+FS_FUN_API int fs_list_get(FS_Volume* volume, FS_FileInfo* file_info)
+{
+    // Read the entry and generate the info
+    FS_FileEntry entry;
+    FWDIOERR(fs_read_fileentry(
+        volume, volume->file_list_block, volume->file_list_index, &entry));
+    file_info->name[sizeof(file_info->name) - 1] = '\0';
+    strncpy((char*)&file_info->name, entry.name, sizeof(entry.name));
+
+    // Get the next entry if there is one
+    const uint32_t entries_per_block =
+        volume->super_block.data_block_size / sizeof(FS_FileEntry);
+    uint32_t current_block = volume->file_list_block;
+
+    for (;;)
+    {
+        // Check all entries in the current block
+        for (uint32_t i = volume->file_list_index; i < entries_per_block; i++)
+        {
+            FS_FileEntry entry;
+            FWDIOERR(fs_read_fileentry(volume, current_block, i, &entry));
+
+            if (entry.magic == FS_FILEMAGIC_FILE)
+            {
+                volume->file_list_block = current_block;
+                volume->file_list_index = i;
+                break;
+            }
+        }
+
+        // Get the next block in the root directory chain
+        uint32_t next_block;
+        FWDIOERR(fs_read_flt(volume, current_block, &next_block));
+
+        // Check for broken chain or end of chain
+        if (next_block == FS_FLT_END_OF_CHAIN) return FS_RESULT_NOT_FOUND;
+        if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+    }
+
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_list_reset(FS_Volume* volume)
+{
+    if (!volume) return FS_RESULT_INVALID_PARAMETER;
+
+    volume->file_list_block = volume->super_block.root_block_index;
+    volume->file_list_index = 0;
+
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API const char* fs_strerror(int code)
+{
+    switch (code)
+    {
+        case FS_RESULT_OK:
+            return "No error";
+        case FS_RESULT_ERROR:
+            return "Generic error";
+        case FS_RESULT_NOT_FOUND:
+            return "Item not found";
+        case FS_RESULT_FILE_EXISTS:
+            return "File already exists";
+        case FS_RESULT_NO_SPACE:
+            return "No space left on device";
+        case FS_RESULT_INVALID_PARAMETER:
+            return "Invalid parameter";
+        case FS_RESULT_MOUNT_ERROR:
+            return "Failed to mount volume";
+        case FS_RESULT_BROKEN_FLT_CHAIN:
+            return "Broken FLT chain detected";
+        case FS_RESULT_IO_ERROR:
+            return "I/O error occurred";
+        default:
+            return "Unknown error code";
+    }
+}

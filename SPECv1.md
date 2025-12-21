@@ -8,14 +8,14 @@ General file system sructure can be represented as following:
 
 ```c
 typedef uint32_t FS_LinkTable;
-typedef uint8_t FS_DataBlock[4096];
+typedef uint8_t FS_DataBlock[super_block.data_block_count];
 
 struct FS_Main
 {
     FS_SuperBlock super_block;
-    // Padding for 4KB alignment
+    // Padding for super_block.data_block_count alignment
     FS_FileLinkTable link_table[super_block.flt_entry_count];
-    // Padding for 4KB alignment
+    // Padding for super_block.data_block_count alignment
     FS_DataBlock data_blocks[super_block.data_block_count];
 };
 ```
@@ -44,7 +44,7 @@ struct FS_SuperBlock
 |:-----:|:------:|:----:|:-------------:|-------------|
 | **magic** | 0x00 | 4B | **"LFFS"** | The magic value describing the file system. **ALWAYS** set to **"LFFS"** (_0x4C, 0x46, 0x46, 0x53_).|
 | **version** | 0x04 | 4B | **0x00000001** |The version the file system. Set to **0x00000001** in the current implementation.|
-| **data_block_size** | 0x08 | 4B | **0x1000** | Size of the data block in bytes. The size **MUST** be a power of 2 and **MUST** not be smaller than a single **inode** (no smaller than **32B**). In the current implementation only the size of **4kB** (_0x1000_) is supported. |
+| **data_block_size** | 0x08 | 4B | **0x1000** | Size of the data block in bytes. The size **MUST** be a power of 2 and **MUST** not be smaller than 64B. |
 | **data_block_count** | 0x0C | 4B | --- |Amount of the **DataBlock**s in the partition. |
 | **data_block_offset** | 0x10 | 8B | --- |Offset of the first **DataBlock** from the start of the partition, measured in **bytes**. |
 | **data_block_offset** | 0x10 | 8B | --- | Offset of the first **DataBlock** from the start of the partition, measured in **bytes**. **MUST** be aligned to the **data_block_size** boundry. |
@@ -92,20 +92,20 @@ The **DataBlock** can hold 2 types of data:
 
 **DataBlock** functions as data storage and stores contents of the file. If the file is larger than the block size, the **FileLinkTable** entry corresponding to the current **DataBlock** points to the next **DataBlock** containing the continuation of file data.
 
-#### INode Array
+#### FileEntry Array
 
-**DataBlock** functions as an array of 128 **INodes**. If there are more **INodes** than a single block can hold, the same mechanism is used as with the files. The **FileLinkTable** entry points to the next **DataBlock** containing more **INodes**. In the current implementation **ONLY** the root **DataBlock** is an **INode** Array.
+**DataBlock** functions as an array of 128 **FileEntries**. If there are more **INodes** than a single block can hold, the same mechanism is used as with the files. The **FileLinkTable** entry points to the next **DataBlock** containing more **INodes**. In the current implementation **ONLY** the root **DataBlock** is an **INode** Array.
 
-### INode
+### FileEntry
 
-**INode** contains information about an entry in the file system. In the current implementation it only describes a file. In future **INode**'s functionality may be extended to also describe directories or symlinks.
+**FileEntry** contains information about an entry in the file system. In the current implementation it only describes a file. In future **INode**'s functionality may be extended to also describe directories or symlinks.
 
 ```c
-struct FS_INode
+struct FS_FileEntry
 {
     uint8_t magic;
     uint8_t flags;
-    uint8_t extra_inode_count;
+    uint8_t extra_attr_count;
     char name[21];
     uint32_t data_block_index;
     uint32_t data_byte_count;
@@ -114,9 +114,9 @@ struct FS_INode
 
 | Field | Offset | Size | Description |
 |:-----:|:------:|:----:|-------------|
-| magic | 0x00 | 1B | Type of the **INode**. Possible values are: **0xFF** - empty_node, **0x46** - file node, **0x00** - deleted node. All remaining values are reserved for future use. | 
-| flags | 0x01 | 1B | Flags of the **INode**. _Reserved for future use._ |
-| extra_inode_count | 0x02 | 1B | Amount of the following **INodes** that provide extra information for this INode. _Reserved for future use._ |
+| magic | 0x00 | 1B | Type of the **FileEntry**. Possible values are: **0xFF** - empty_node, **0x46** - file node, **0x00** - deleted node. All remaining values are reserved for future use. | 
+| flags | 0x01 | 1B | Flags of the **FileEntry**. _Reserved for future use._ |
+| extra_attr_count | 0x02 | 1B | Amount of the following **FileEntries** that provide extra information for this entry. _Reserved for future use._ |
 | name | 0x03 | 21B | 21 character ASCII filename. Char array is **NOT** null terminated. |
 | data_block_index | 0x18 | 4B | Index of the first **DataBlock** occupied by the referenced file |
 | data_byte_count | 0x1C | 4B | Length of the file in **bytes**. |
