@@ -1,6 +1,7 @@
 build/
 .vscode/
-.cache
+.cache/
+tmp/
 
 *.bin
 *.lffs

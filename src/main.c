@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "fs.h"
@@ -26,6 +27,18 @@ void print_help_and_exit(const char* prog_name)
         "  rm <volume> <filename>                     Remove a file from the "
         "volume\n");
     exit(1);
+}
+
+void print_size(uint32_t size)
+{
+    if (size < 1024)
+        printf("%u B", size);
+    else if (size < 1024 * 1024)
+        printf("%.2f KB", size / 1024.0f);
+    else if (size < 1024 * 1024 * 1024)
+        printf("%.2f MB", size / (1024.0f * 1024.0f));
+    else
+        printf("%.2f GB", size / (1024.0f * 1024.0f * 1024.0f));
 }
 
 void create_volume(int argc, char** argv)
@@ -61,13 +74,16 @@ void create_volume(int argc, char** argv)
     uint32_t vol_size = drive_size_bytes / 1024;
     uint32_t block_size = volume.super_block.data_block_size;
     uint32_t block_count = volume.super_block.data_block_count;
-    uint32_t flt_size = block_count / 1024 * sizeof(FS_FLTEntry);
+    uint32_t flt_size = block_count * sizeof(FS_FLTEntry);
 
-    printf("Created volume:\n");
-    printf(" Volume Size: %u KB\n", vol_size);
-    printf(" Data Block Size: %u bytes\n", block_size);
-    printf(" Data Block Count: %u\n", block_count);
-    printf(" FLT Size: %u KB\n", flt_size);
+    printf("Created volume:\n Volume Size: ");
+    print_size(vol_size * 1024);
+    printf("\n Data Block Size: ");
+    print_size(block_size);
+    printf("\n Data Block Count: %u\n", block_count);
+    printf(" FLT Size: ");
+    print_size(flt_size);
+    printf("\n");
 
     fs_volume_unmount(&volume);
 }
@@ -257,7 +273,9 @@ void ls_files(int argc, char** argv)
                 stderr, "Failed to list files: %s\n", fs_strerror(result));
             break;
         }
-        printf("File: %s (%u bytes)\n", file_info.name, file_info.size_bytes);
+        printf(" * %s (", file_info.name);
+        print_size(file_info.size_bytes);
+        printf(")\n");
         if (result == FS_RESULT_NOT_FOUND) break;
     }
 
@@ -267,10 +285,9 @@ void ls_files(int argc, char** argv)
 
 uint32_t map_random_color(void)
 {
-    // 36 possible hues * 3 brightness levels * 3 saturation levels
     float hue = rand() % 36 / 36.0f;
     float saturation = 0.5f + (rand() % 3) * 0.25f;
-    float brightness = 0.5f + (rand() % 3) * 0.25f;
+    float brightness = 1.0f;
     // Convert HSV to RGB
     float c = brightness * saturation;
     float x = c * (1 - fabsf(fmodf(hue * 6, 2) - 1));
@@ -365,9 +382,11 @@ void dump_map(int argc, char** argv)
     printf("File Legend:\n");
     for (int i = 0; i < dump.file_count; i++)
     {
-        printf(" * \x1b[38;2;%u;%u;%um%s\x1b[0m (%u bytes)\n",
+        printf(" * \x1b[38;2;%u;%u;%um%s\x1b[0m (",
             (colors[i] >> 16) & 0xFF, (colors[i] >> 8) & 0xFF,
-            colors[i] & 0xFF, dump.file_names[i], dump.file_sizes[i]);
+            colors[i] & 0xFF, dump.file_names[i]);
+        print_size(dump.file_sizes[i]);
+        printf(")\n");
     }
 
     // Cleanup
@@ -378,6 +397,8 @@ void dump_map(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+    srand((unsigned int)time(NULL));
+
     if (argc < 2) print_help_and_exit(argv[0]);
     if (strcmp(argv[1], "create_volume") == 0)
         create_volume(argc, argv);

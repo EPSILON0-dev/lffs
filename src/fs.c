@@ -235,6 +235,7 @@ FS_FUN_INTERNAL int fs_create_fileentry(
             FWDERR(fs_find_free_block(vol, &next_block));
             FWDIOERR(fs_clear_block(vol, next_block));
             FWDIOERR(fs_write_flt(vol, current_block, next_block));
+            FWDIOERR(fs_write_flt(vol, next_block, FS_FLT_END_OF_CHAIN));
         }
 
         current_block = next_block;
@@ -462,6 +463,9 @@ FS_FUN_API int fs_file_write(FS_Volume* volume, const char* filename,
     // Get the first empty block
     uint32_t current_block;
     fs_find_free_block(volume, &current_block);
+    // TODO Find better solution
+    // Mark the end of chain to avoid the search assuming it's empty
+    FWDIOERR(fs_write_flt(volume, current_block, FS_FLT_END_OF_CHAIN));
 
     // Create the entry
     FWDERR(fs_create_fileentry(volume, &block, &index));
@@ -483,6 +487,9 @@ FS_FUN_API int fs_file_write(FS_Volume* volume, const char* filename,
         uint32_t chunk_size =
             (bytes_remaining < block_size) ? bytes_remaining : block_size;
 
+        // Mark the block as used
+        volume->used_data_blocks++;
+
         // Write a chunk and update counters
         FWDIOERR(fs_write_block(volume, current_block,
             ((uint8_t*)data + *bytes_written), chunk_size));
@@ -500,6 +507,7 @@ FS_FUN_API int fs_file_write(FS_Volume* volume, const char* filename,
         // Find the next block and store it to FLT
         uint32_t next_block;
         // Mark the end of chain to avoid the search assuming it's empty
+        // TODO Find better solution
         FWDIOERR(fs_write_flt(volume, current_block, FS_FLT_END_OF_CHAIN));
         FWDERR(fs_find_free_block(volume, &next_block));
         FWDIOERR(fs_write_flt(volume, current_block, next_block));
@@ -605,6 +613,8 @@ FS_FUN_API int fs_list_get(FS_Volume* volume, FS_FileInfo* file_info)
         if (next_block == FS_FLT_END_OF_CHAIN) return FS_RESULT_NOT_FOUND;
         if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
             return FS_RESULT_BROKEN_FLT_CHAIN;
+
+        current_block = next_block;
     }
 
     return FS_RESULT_OK;
@@ -656,14 +666,10 @@ FS_FUN_API int fs_flt_dump_create(FS_Volume* vol, FS_FLTDump* dump)
     dump->file_count = vol->file_entry_count + 1;  // +1 for root chain
     dump->file_names = malloc(dump->file_count * sizeof(const char*));
     dump->file_sizes = malloc(dump->file_count * sizeof(uint32_t));
-    dump->entry_usage =
-        malloc(vol->super_block.flt_entry_count * sizeof(uint32_t));
     dump->entries =
         malloc(vol->super_block.flt_entry_count * sizeof(FS_FLTEntry));
 
     // Clear the usage and entries
-    memset(dump->entry_usage, 0,
-        vol->super_block.flt_entry_count * sizeof(uint32_t));
     memset(dump->entries, 0,
         vol->super_block.flt_entry_count * sizeof(FS_FLTEntry));
 
@@ -694,7 +700,6 @@ FS_FUN_API int fs_flt_dump_create(FS_Volume* vol, FS_FLTDump* dump)
             {
                 uint32_t block_bytes =
                     bytes_left < block_size ? bytes_left : block_size;
-                dump->entry_usage[data_block] = block_bytes;
                 dump->entries[data_block] = curr_file;
 
                 // Get the next block in the chain
@@ -728,19 +733,15 @@ FS_FUN_API int fs_flt_dump_create(FS_Volume* vol, FS_FLTDump* dump)
     dump->file_sizes[root_chain] =
         (dump->file_count - 1) * sizeof(FS_FileEntry);
     dump->file_names[root_chain] = strdup("<root_directory>");
-    uint32_t root_size = (dump->file_count - 1) * sizeof(FS_FileEntry);
     for (;;)
     {
-        dump->entry_usage[current_block] =
-            root_size < block_size ? root_size : block_size;
-        dump->entries[current_block] = root_chain;
+        dump->entries[current_block] = root_chain + 1;
         uint32_t next_block;
         FWDIOERR(fs_read_flt(vol, current_block, &next_block));
         if (next_block == FS_FLT_END_OF_CHAIN) break;
         if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
             return FS_RESULT_BROKEN_FLT_CHAIN;
         current_block = next_block;
-        root_size -= block_size;
     }
 
     return FS_RESULT_OK;
@@ -755,7 +756,6 @@ FS_FUN_API int fs_flt_dump_free(FS_FLTDump* dump)
         free((void*)dump->file_names[i]);
     free(dump->file_names);
     free(dump->file_sizes);
-    free(dump->entry_usage);
     free(dump->entries);
 
     return FS_RESULT_OK;

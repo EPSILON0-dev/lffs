@@ -91,7 +91,6 @@ typedef struct
     int file_count;
     char** file_names;
     uint32_t* file_sizes;
-    uint32_t* entry_usage;
     FS_FLTEntry* entries;  // file_names index + 1, 0 = free
 } FS_FLTDump;
 #endif
