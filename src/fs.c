@@ -1,9 +1,11 @@
 #include "fs.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
-FS_FUN_INLINE void __DBGTRAP()
+FS_FUN_INLINE void __DBGTRAP(void)
 {
     (void)0;
 }
@@ -187,6 +189,8 @@ FS_FUN_INTERNAL int fs_find_fileentry(
         if (next_block == FS_FLT_END_OF_CHAIN) break;
         if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
             return FS_RESULT_BROKEN_FLT_CHAIN;
+
+        current_block = next_block;
     }
 
     return FS_RESULT_NOT_FOUND;
@@ -241,8 +245,6 @@ FS_FUN_INTERNAL int fs_create_fileentry(
 
 FS_FUN_INTERNAL int fs_clear_flt_chain(FS_Volume* vol, uint32_t block)
 {
-    const uint32_t free_entry = FS_FLT_FREE;
-
     for (;;)
     {
         // Read and clear the current FLT entry
@@ -414,8 +416,8 @@ FS_FUN_API int fs_file_read(FS_Volume* volume, const char* filename,
             (bytes_remaining < block_size) ? bytes_remaining : block_size;
 
         // Read a chunk and update counters
-        FWDIOERR(fs_read_block(
-            volume, current_block, (buffer + *bytes_read), chunk_size));
+        FWDIOERR(fs_read_block(volume, current_block,
+            ((uint8_t*)buffer + *bytes_read), chunk_size));
         *bytes_read += chunk_size;
         bytes_remaining -= chunk_size;
 
@@ -482,8 +484,8 @@ FS_FUN_API int fs_file_write(FS_Volume* volume, const char* filename,
             (bytes_remaining < block_size) ? bytes_remaining : block_size;
 
         // Write a chunk and update counters
-        FWDIOERR(fs_write_block(
-            volume, current_block, (data + *bytes_written), chunk_size));
+        FWDIOERR(fs_write_block(volume, current_block,
+            ((uint8_t*)data + *bytes_written), chunk_size));
         *bytes_written += chunk_size;
         bytes_remaining -= chunk_size;
 
@@ -504,6 +506,7 @@ FS_FUN_API int fs_file_write(FS_Volume* volume, const char* filename,
         current_block = next_block;
     }
 
+    volume->file_entry_count++;
     return FS_RESULT_OK;
 }
 
@@ -568,8 +571,9 @@ FS_FUN_API int fs_list_get(FS_Volume* volume, FS_FileInfo* file_info)
     FS_FileEntry entry;
     FWDIOERR(fs_read_fileentry(
         volume, volume->file_list_block, volume->file_list_index, &entry));
+    strncpy((char*)&file_info->name, entry.name, sizeof(file_info->name) - 1);
     file_info->name[sizeof(file_info->name) - 1] = '\0';
-    strncpy((char*)&file_info->name, entry.name, sizeof(entry.name));
+    file_info->size_bytes = entry.data_byte_count;
 
     // Get the next entry if there is one
     const uint32_t entries_per_block =
@@ -579,7 +583,8 @@ FS_FUN_API int fs_list_get(FS_Volume* volume, FS_FileInfo* file_info)
     for (;;)
     {
         // Check all entries in the current block
-        for (uint32_t i = volume->file_list_index; i < entries_per_block; i++)
+        for (uint32_t i = volume->file_list_index + 1; i < entries_per_block;
+            i++)
         {
             FS_FileEntry entry;
             FWDIOERR(fs_read_fileentry(volume, current_block, i, &entry));
@@ -588,7 +593,7 @@ FS_FUN_API int fs_list_get(FS_Volume* volume, FS_FileInfo* file_info)
             {
                 volume->file_list_block = current_block;
                 volume->file_list_index = i;
-                break;
+                return FS_RESULT_OK;
             }
         }
 
@@ -641,3 +646,118 @@ FS_FUN_API const char* fs_strerror(int code)
             return "Unknown error code";
     }
 }
+
+#if FS_FLT_DUMP_ENABLE != 0
+FS_FUN_API int fs_flt_dump_create(FS_Volume* vol, FS_FLTDump* dump)
+{
+    if (!vol || !dump) return FS_RESULT_INVALID_PARAMETER;
+
+    // Allocate memory for dump structures
+    dump->file_count = vol->file_entry_count + 1;  // +1 for root chain
+    dump->file_names = malloc(dump->file_count * sizeof(const char*));
+    dump->file_sizes = malloc(dump->file_count * sizeof(uint32_t));
+    dump->entry_usage =
+        malloc(vol->super_block.flt_entry_count * sizeof(uint32_t));
+    dump->entries =
+        malloc(vol->super_block.flt_entry_count * sizeof(FS_FLTEntry));
+
+    // Clear the usage and entries
+    memset(dump->entry_usage, 0,
+        vol->super_block.flt_entry_count * sizeof(uint32_t));
+    memset(dump->entries, 0,
+        vol->super_block.flt_entry_count * sizeof(FS_FLTEntry));
+
+    // Scan the files and build the dump
+    const uint32_t block_size = vol->super_block.data_block_size;
+    const uint32_t entries_per_block = block_size / sizeof(FS_FileEntry);
+    uint32_t curr_block = vol->super_block.root_block_index;
+    uint32_t curr_file = 1;
+    for (;;)
+    {
+        for (uint32_t i = 0; i < entries_per_block; i++)
+        {
+            FS_FileEntry entry;
+            FWDIOERR(fs_read_fileentry(vol, curr_block, i, &entry));
+            if (entry.magic != FS_FILEMAGIC_FILE) continue;
+
+            // Store the file name and size
+            dump->file_names[curr_file - 1] = malloc(sizeof(entry.name) + 1);
+            strncpy((char*)dump->file_names[curr_file - 1], entry.name,
+                strlen(entry.name));
+            dump->file_names[curr_file - 1][strlen(entry.name)] = '\0';
+            dump->file_sizes[curr_file - 1] = entry.data_byte_count;
+
+            // Follow the FLT chain and mark usage
+            uint32_t data_block = entry.data_block_index;
+            uint32_t bytes_left = entry.data_byte_count;
+            for (;;)
+            {
+                uint32_t block_bytes =
+                    bytes_left < block_size ? bytes_left : block_size;
+                dump->entry_usage[data_block] = block_bytes;
+                dump->entries[data_block] = curr_file;
+
+                // Get the next block in the chain
+                uint32_t next_block;
+                FWDIOERR(fs_read_flt(vol, data_block, &next_block));
+                data_block = next_block;
+
+                // Check for broken chain or end of chain
+                if (data_block == FS_FLT_FREE || data_block == FS_FLT_DELETED)
+                    return FS_RESULT_BROKEN_FLT_CHAIN;
+                if (data_block == FS_FLT_END_OF_CHAIN) break;
+
+                bytes_left -= block_bytes;
+            }
+
+            curr_file++;
+        }
+
+        // Get the next block in the root directory chain
+        uint32_t next_block;
+        FWDIOERR(fs_read_flt(vol, curr_block, &next_block));
+        if (next_block == FS_FLT_END_OF_CHAIN) break;
+        if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+        curr_block = next_block;
+    }
+
+    // Follow the root chain
+    uint32_t root_chain = dump->file_count - 1;
+    uint32_t current_block = vol->super_block.root_block_index;
+    dump->file_sizes[root_chain] =
+        (dump->file_count - 1) * sizeof(FS_FileEntry);
+    dump->file_names[root_chain] = strdup("<root_directory>");
+    uint32_t root_size = (dump->file_count - 1) * sizeof(FS_FileEntry);
+    for (;;)
+    {
+        dump->entry_usage[current_block] =
+            root_size < block_size ? root_size : block_size;
+        dump->entries[current_block] = root_chain;
+        uint32_t next_block;
+        FWDIOERR(fs_read_flt(vol, current_block, &next_block));
+        if (next_block == FS_FLT_END_OF_CHAIN) break;
+        if (next_block == FS_FLT_FREE || next_block == FS_FLT_DELETED)
+            return FS_RESULT_BROKEN_FLT_CHAIN;
+        current_block = next_block;
+        root_size -= block_size;
+    }
+
+    return FS_RESULT_OK;
+}
+
+FS_FUN_API int fs_flt_dump_free(FS_FLTDump* dump)
+{
+    if (!dump) return FS_RESULT_INVALID_PARAMETER;
+
+    // Free allocated memory
+    for (int i = 0; i < dump->file_count; i++)
+        free((void*)dump->file_names[i]);
+    free(dump->file_names);
+    free(dump->file_sizes);
+    free(dump->entry_usage);
+    free(dump->entries);
+
+    return FS_RESULT_OK;
+}
+#endif

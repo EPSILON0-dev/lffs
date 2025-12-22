@@ -20,6 +20,8 @@
 #define FS_FUN_INTERNAL static
 #define FS_FUN_API
 
+#define FS_FLT_DUMP_ENABLE 1
+
 // ----------------------------------------------------------------------
 // File system structures
 // ----------------------------------------------------------------------
@@ -54,7 +56,7 @@ typedef uint32_t FS_FLTEntry;
 // Driver specific structures
 // ----------------------------------------------------------------------
 
-enum FS_Result : uint8_t
+enum FS_Result
 {
     FS_RESULT_OK = 0,
     FS_RESULT_ERROR,
@@ -83,6 +85,17 @@ typedef struct
     uint32_t size_bytes;
 } FS_FileInfo;
 
+#if FS_FLT_DUMP_ENABLE != 0
+typedef struct
+{
+    int file_count;
+    char** file_names;
+    uint32_t* file_sizes;
+    uint32_t* entry_usage;
+    FS_FLTEntry* entries;  // file_names index + 1, 0 = free
+} FS_FLTDump;
+#endif
+
 // ----------------------------------------------------------------------
 // Driver methods
 // ----------------------------------------------------------------------
@@ -109,5 +122,11 @@ FS_FUN_API int fs_list_reset(FS_Volume* vol);
 
 // Error string
 FS_FUN_API const char* fs_strerror(int code);
+
+// FLT Dumping
+#if FS_FLT_DUMP_ENABLE != 0
+FS_FUN_API int fs_flt_dump_create(FS_Volume* vol, FS_FLTDump* dump);
+FS_FUN_API int fs_flt_dump_free(FS_FLTDump* dump);
+#endif
 
 #endif

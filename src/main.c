@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,7 +53,8 @@ void create_volume(int argc, char** argv)
     result = fs_volume_mount(&volume, path);
     if (result != FS_RESULT_OK)
     {
-        fprintf(stderr, "Failed to mount volume. Error code: %s\n", fs_strerror(result));
+        fprintf(stderr, "Failed to mount volume. Error code: %s\n",
+            fs_strerror(result));
         exit(1);
     }
 
@@ -70,8 +72,28 @@ void create_volume(int argc, char** argv)
     fs_volume_unmount(&volume);
 }
 
+void delete_volume(int argc, char** argv)
+{
+    if (argc < 3)
+    {
+        fprintf(stderr, "Usage: %s delete_volume <path>\n", argv[0]);
+        return;
+    }
+
+    const char* path = argv[2];
+    if (unlink(path) != 0)
+    {
+        fprintf(stderr, "Failed to delete volume at %s\n", path);
+    }
+    else
+    {
+        printf("Volume at %s deleted successfully\n", path);
+    }
+}
+
 void put_file(int argc, char** argv)
 {
+    (void)argc;
     const char* volume_path = argv[2];
     const char* source_file_path = argv[3];
     const char* dest_file_name = argv[4];
@@ -124,6 +146,7 @@ void put_file(int argc, char** argv)
 
 void get_file(int argc, char** argv)
 {
+    (void)argc;
     const char* volume_path = argv[2];
     const char* source_file_path = argv[3];
     const char* dest_file_name = argv[4];
@@ -181,6 +204,7 @@ void get_file(int argc, char** argv)
 
 void rm_file(int argc, char** argv)
 {
+    (void)argc;
     const char* volume_path = argv[2];
     const char* file_name = argv[3];
 
@@ -211,6 +235,7 @@ void rm_file(int argc, char** argv)
 
 void ls_files(int argc, char** argv)
 {
+    (void)argc;
     const char* volume_path = argv[2];
 
     // Mount the volume
@@ -222,32 +247,132 @@ void ls_files(int argc, char** argv)
         return;
     }
 
-    // List files in the volume
-    uint32_t file_count;
-    result = fs_list_len(&volume, &file_count);
+    for (;;)
+    {
+        FS_FileInfo file_info;
+        result = fs_list_get(&volume, &file_info);
+        if (result != FS_RESULT_OK && result != FS_RESULT_NOT_FOUND)
+        {
+            fprintf(
+                stderr, "Failed to list files: %s\n", fs_strerror(result));
+            break;
+        }
+        printf("File: %s (%u bytes)\n", file_info.name, file_info.size_bytes);
+        if (result == FS_RESULT_NOT_FOUND) break;
+    }
+
+    // Cleanup
+    fs_volume_unmount(&volume);
+}
+
+uint32_t map_random_color(void)
+{
+    // 36 possible hues * 3 brightness levels * 3 saturation levels
+    float hue = rand() % 36 / 36.0f;
+    float saturation = 0.5f + (rand() % 3) * 0.25f;
+    float brightness = 0.5f + (rand() % 3) * 0.25f;
+    // Convert HSV to RGB
+    float c = brightness * saturation;
+    float x = c * (1 - fabsf(fmodf(hue * 6, 2) - 1));
+    float m = brightness - c;
+    float r, g, b;
+    if (hue < 1.0f / 6)
+    {
+        r = c;
+        g = x;
+        b = 0;
+    }
+    else if (hue < 2.0f / 6)
+    {
+        r = x;
+        g = c;
+        b = 0;
+    }
+    else if (hue < 3.0f / 6)
+    {
+        r = 0;
+        g = c;
+        b = x;
+    }
+    else if (hue < 4.0f / 6)
+    {
+        r = 0;
+        g = x;
+        b = c;
+    }
+    else if (hue < 5.0f / 6)
+    {
+        r = x;
+        g = 0;
+        b = c;
+    }
+    else
+    {
+        r = c;
+        g = 0;
+        b = x;
+    }
+    uint8_t R = (uint8_t)((r + m) * 255);
+    uint8_t G = (uint8_t)((g + m) * 255);
+    uint8_t B = (uint8_t)((b + m) * 255);
+    return (R << 16) | (G << 8) | B;
+}
+
+void dump_map(int argc, char** argv)
+{
+    (void)argc;
+    const char* volume_path = argv[2];
+
+    // Mount the volume
+    FS_Volume volume;
+    int result = fs_volume_mount(&volume, volume_path);
     if (result != FS_RESULT_OK)
     {
-        fprintf(stderr, "Failed to get file list length: %s\n",
-            fs_strerror(result));
+        fprintf(stderr, "Failed to mount volume: %s\n", fs_strerror(result));
+        return;
+    }
+
+    // Create the FLT dump
+    FS_FLTDump dump;
+    result = fs_flt_dump_create(&volume, &dump);
+    if (result != FS_RESULT_OK)
+    {
+        fprintf(
+            stderr, "Failed to create FLT dump: %s\n", fs_strerror(result));
         fs_volume_unmount(&volume);
         return;
     }
 
-    printf("Files in volume %s:\n", volume_path);
-    for (uint32_t i = 0; i < file_count; i++)
+    // Give each entry a color
+    uint32_t* colors = malloc(dump.file_count * sizeof(uint32_t));
+    for (int i = 0; i < dump.file_count; i++) colors[i] = map_random_color();
+
+    // Print the map
+    for (uint32_t i = 0; i < volume.super_block.flt_entry_count; i++)
     {
-        FS_FileInfo info;
-        result = fs_list_get(&volume, &info);
-        if (result != FS_RESULT_OK)
-        {
-            fprintf(
-                stderr, "Failed to get file info: %s\n", fs_strerror(result));
-            break;
-        }
-        printf(" - %s (%u bytes)\n", info.name, info.size_bytes);
+        uint32_t entry = dump.entries[i];
+        if (entry == 0)
+            printf(".");  // Free block
+        else
+            printf("\x1b[38;2;%u;%u;%um#\x1b[0m",
+                (colors[entry - 1] >> 16) & 0xFF,
+                (colors[entry - 1] >> 8) & 0xFF, colors[entry - 1] & 0xFF);
+        if ((i + 1) % 64 == 0) printf("\n");
+    }
+    printf("\n");
+
+    // Print the file legend
+    printf("File Legend:\n");
+    for (int i = 0; i < dump.file_count; i++)
+    {
+        printf(" * \x1b[38;2;%u;%u;%um%s\x1b[0m (%u bytes)\n",
+            (colors[i] >> 16) & 0xFF, (colors[i] >> 8) & 0xFF,
+            colors[i] & 0xFF, dump.file_names[i], dump.file_sizes[i]);
     }
 
     // Cleanup
+    free(colors);
+    fs_flt_dump_free(&dump);
     fs_volume_unmount(&volume);
 }
 
@@ -257,7 +382,7 @@ int main(int argc, char** argv)
     if (strcmp(argv[1], "create_volume") == 0)
         create_volume(argc, argv);
     else if (strcmp(argv[1], "delete_volume") == 0)
-        unlink(argv[2]);
+        delete_volume(argc, argv);
     else if (strcmp(argv[1], "ls") == 0)
         ls_files(argc, argv);
     else if (strcmp(argv[1], "put") == 0)
@@ -266,6 +391,10 @@ int main(int argc, char** argv)
         get_file(argc, argv);
     else if (strcmp(argv[1], "rm") == 0)
         rm_file(argc, argv);
+    else if (strcmp(argv[1], "dump_map") == 0)
+        dump_map(argc, argv);
+    else if (strcmp(argv[1], "help") == 0)
+        print_help_and_exit(argv[0]);
     else
         print_help_and_exit(argv[0]);
 }
