@@ -1,3 +1,9 @@
 build/
 .vscode/
 .cache
+
+*.bin
+*.lffs
+
+fs
+compile_commands.json

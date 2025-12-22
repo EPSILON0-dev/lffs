@@ -43,7 +43,8 @@ void create_volume(int argc, char** argv)
 
     int result = fs_volume_create(path, data_block_size, drive_size_bytes);
     if (result != FS_RESULT_OK)
-        fprintf(stderr, "Failed to create volume. Error code: %d\n", result);
+        fprintf(stderr, "Failed to create volume. Error code: %s\n",
+            fs_strerror(result));
     else
         printf("Volume created successfully at %s\n", path);
 
@@ -51,7 +52,7 @@ void create_volume(int argc, char** argv)
     result = fs_volume_mount(&volume, path);
     if (result != FS_RESULT_OK)
     {
-        fprintf(stderr, "Failed to mount volume. Error code: %d\n", result);
+        fprintf(stderr, "Failed to mount volume. Error code: %s\n", fs_strerror(result));
         exit(1);
     }
 

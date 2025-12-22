@@ -20,6 +20,8 @@ struct FS_Main
 };
 ```
 
+All multi-byte values are stored as **LITTLE-ENDIAN**.
+
 ### SuperBlock
 
 The **SuperBlock** is the main filesystem descriptor. It contains the magic value and the version of the file system, as well as information about the organization of the files. The sizes and offsets of **FileLinkingTable** and **DataBlockSection** are also contained in this structure.
