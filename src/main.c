@@ -1,3 +1,4 @@
+#include <asm-generic/errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,7 +121,7 @@ void put_file(int argc, char** argv)
     if (result != FS_RESULT_OK)
     {
         fprintf(stderr, "Failed to mount volume: %s\n", fs_strerror(result));
-        return;
+        exit(1);
     }
 
     // Open the source file
@@ -129,7 +130,7 @@ void put_file(int argc, char** argv)
     {
         fprintf(stderr, "Failed to open source file: %s\n", source_file_path);
         fs_volume_unmount(&volume);
-        return;
+        exit(1);
     }
 
     // Get the file size and read the data
@@ -158,6 +159,8 @@ void put_file(int argc, char** argv)
     free(buffer);
     fs_volume_unmount(&volume);
     fclose(source_file);
+
+    if (result != FS_RESULT_OK) exit(1);
 }
 
 void get_file(int argc, char** argv)
@@ -173,7 +176,7 @@ void get_file(int argc, char** argv)
     if (result != FS_RESULT_OK)
     {
         fprintf(stderr, "Failed to mount volume: %s\n", fs_strerror(result));
-        return;
+        exit(1);
     }
 
     // Read the file from the volume
@@ -183,7 +186,7 @@ void get_file(int argc, char** argv)
     {
         fprintf(stderr, "Failed to get file size: %s\n", fs_strerror(result));
         fs_volume_unmount(&volume);
-        return;
+        exit(1);
     }
     void* buffer = malloc(file_size);
     uint32_t bytes_read;
@@ -195,7 +198,7 @@ void get_file(int argc, char** argv)
             fs_strerror(result));
         free(buffer);
         fs_volume_unmount(&volume);
-        return;
+        exit(1);
     }
 
     // Write the data to the destination file
@@ -206,7 +209,7 @@ void get_file(int argc, char** argv)
             stderr, "Failed to open destination file: %s\n", dest_file_name);
         free(buffer);
         fs_volume_unmount(&volume);
-        return;
+        exit(1);
     }
     fwrite(buffer, 1, bytes_read, dest_file);
     printf("Read %u bytes from %s in volume %s\n", bytes_read,
@@ -216,6 +219,7 @@ void get_file(int argc, char** argv)
     free(buffer);
     fs_volume_unmount(&volume);
     fclose(dest_file);
+    if (result != FS_RESULT_OK) exit(1);
 }
 
 void rm_file(int argc, char** argv)
@@ -230,7 +234,7 @@ void rm_file(int argc, char** argv)
     if (result != FS_RESULT_OK)
     {
         fprintf(stderr, "Failed to mount volume: %s\n", fs_strerror(result));
-        return;
+        exit(1);
     }
 
     // Delete the file from the volume
@@ -247,6 +251,7 @@ void rm_file(int argc, char** argv)
 
     // Cleanup
     fs_volume_unmount(&volume);
+    if (result != FS_RESULT_OK) exit(1);
 }
 
 void ls_files(int argc, char** argv)
@@ -260,7 +265,7 @@ void ls_files(int argc, char** argv)
     if (result != FS_RESULT_OK)
     {
         fprintf(stderr, "Failed to mount volume: %s\n", fs_strerror(result));
-        return;
+        exit(1);
     }
 
     for (;;)
@@ -281,6 +286,8 @@ void ls_files(int argc, char** argv)
 
     // Cleanup
     fs_volume_unmount(&volume);
+
+    if (result != FS_RESULT_OK && result != FS_RESULT_NOT_FOUND) exit(1);
 }
 
 uint32_t map_random_color(void)

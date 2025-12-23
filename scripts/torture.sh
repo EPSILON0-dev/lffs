@@ -37,8 +37,9 @@ put_file_fs()
     fname="file$(head -c2 /dev/urandom | od -An -tu2 | tr -d ' ')"
     fsize=$(random $MAX_FILE_SIZE)
     gen_random_file $fsize $TMP_FILE
-    ./fs put $FS_FILE $TMP_FILE $fname
-    echo "$fname $fsize $(md5sum $TMP_FILE | cut -d' ' -f1)" >> $DB_FILE
+    if ./fs put $FS_FILE $TMP_FILE $fname; then
+        echo "$fname $fsize $(md5sum $TMP_FILE | cut -d' ' -f1)" >> $DB_FILE
+    fi
 }
 
 delete_file_fs()
@@ -59,9 +60,9 @@ main()
     count=0
     while [ $count -lt $N_OPERATIONS ]; do
         printf "\rOperation %d/%d" $(($count+1)) $N_OPERATIONS
-        put_file_fs > /dev/null 2>/dev/null
-        put_file_fs > /dev/null 2>/dev/null
         delete_file_fs > /dev/null 2>/dev/null
+        put_file_fs > /dev/null 2>/dev/null
+        put_file_fs > /dev/null 2>/dev/null
         count=$((count + 1))
     done
     echo
