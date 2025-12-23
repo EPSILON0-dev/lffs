@@ -14,7 +14,10 @@ add_executable(fs src/main.c src/fs.c)
 
 target_include_directories(fs PRIVATE src)
 target_link_libraries(fs PRIVATE m)
-target_compile_options(fs PRIVATE -fsanitize=address -O0 -g -Wall -Wextra -Wpedantic)
+target_compile_options(fs PRIVATE 
+    $<$<CONFIG:Debug>:-fsanitize=address -O0 -g -Wall -Wextra -Wpedantic>
+    $<$<CONFIG:Release>:-O2 -Wall -Wextra -Wpedantic>
+)
 target_link_options(fs PRIVATE -fsanitize=address)
 
 # Create link to fs in the build directory

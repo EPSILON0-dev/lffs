@@ -285,7 +285,7 @@ void ls_files(int argc, char** argv)
 
 uint32_t map_random_color(void)
 {
-    float hue = rand() % 36 / 36.0f;
+    float hue = rand() % 10 / 9.0f;
     float saturation = 0.5f + (rand() % 3) * 0.25f;
     float brightness = 1.0f;
     // Convert HSV to RGB

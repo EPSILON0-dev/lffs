@@ -236,6 +236,7 @@ FS_FUN_INTERNAL int fs_create_fileentry(
             FWDIOERR(fs_clear_block(vol, next_block));
             FWDIOERR(fs_write_flt(vol, current_block, next_block));
             FWDIOERR(fs_write_flt(vol, next_block, FS_FLT_END_OF_CHAIN));
+            vol->used_data_blocks++;
         }
 
         current_block = next_block;
@@ -313,6 +314,9 @@ FS_FUN_API int fs_volume_create(
     // Check if the block size is a power of two
     if ((block_size & (block_size - 1)) != 0)
         return FS_RESULT_INVALID_PARAMETER;
+
+    // Check if a directory entry can fit in a block
+    if (block_size < 32) return FS_RESULT_INVALID_PARAMETER;
 
     // Create and open the file
     FILE* f = fopen(path, "w+b");
@@ -471,7 +475,10 @@ FS_FUN_API int fs_file_write(FS_Volume* volume, const char* filename,
     FWDERR(fs_create_fileentry(volume, &block, &index));
     memset(&entry, 0, sizeof(FS_FileEntry));
     entry.magic = FS_FILEMAGIC_FILE;
-    strncpy(entry.name, filename, sizeof(entry.name));
+    const uint32_t name_len = (strlen(filename) < sizeof(entry.name))
+                                  ? strlen(filename)
+                                  : sizeof(entry.name);
+    memcpy(entry.name, filename, name_len);
     entry.data_block_index = current_block;
     entry.data_byte_count = data_size;
     FWDIOERR(fs_write_fileentry(volume, block, index, &entry));
@@ -615,6 +622,8 @@ FS_FUN_API int fs_list_get(FS_Volume* volume, FS_FileInfo* file_info)
             return FS_RESULT_BROKEN_FLT_CHAIN;
 
         current_block = next_block;
+        // for will loop it back to 0
+        volume->file_list_index = -1;
     }
 
     return FS_RESULT_OK;
@@ -687,10 +696,10 @@ FS_FUN_API int fs_flt_dump_create(FS_Volume* vol, FS_FLTDump* dump)
             if (entry.magic != FS_FILEMAGIC_FILE) continue;
 
             // Store the file name and size
-            dump->file_names[curr_file - 1] = malloc(sizeof(entry.name) + 1);
-            strncpy((char*)dump->file_names[curr_file - 1], entry.name,
-                strlen(entry.name));
-            dump->file_names[curr_file - 1][strlen(entry.name)] = '\0';
+            char buff[sizeof(entry.name) + 1];
+            memcpy(buff, entry.name, sizeof(entry.name));
+            buff[sizeof(entry.name)] = '\0';
+            dump->file_names[curr_file - 1] = strdup(buff);
             dump->file_sizes[curr_file - 1] = entry.data_byte_count;
 
             // Follow the FLT chain and mark usage
