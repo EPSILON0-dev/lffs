@@ -99,13 +99,9 @@ void delete_volume(int argc, char** argv)
 
     const char* path = argv[2];
     if (unlink(path) != 0)
-    {
         fprintf(stderr, "Failed to delete volume at %s\n", path);
-    }
     else
-    {
         printf("Volume at %s deleted successfully\n", path);
-    }
 }
 
 void put_file(int argc, char** argv)
@@ -141,9 +137,13 @@ void put_file(int argc, char** argv)
     fread(buffer, 1, file_size, source_file);
 
     // Write the file to the volume
+    clock_t start_time = clock();
     uint32_t bytes_written;
     result = fs_file_write(
         &volume, dest_file_name, buffer, file_size, &bytes_written);
+    clock_t end_time = clock();
+    double time_taken = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+
     if (result != FS_RESULT_OK)
     {
         fprintf(stderr, "Failed to write file to volume: %s\n",
@@ -151,8 +151,8 @@ void put_file(int argc, char** argv)
     }
     else
     {
-        printf("Wrote %u bytes to %s in volume %s\n", bytes_written,
-            dest_file_name, volume_path);
+        printf("Wrote %u bytes to %s in volume %s (took %.2f ms)\n",
+            bytes_written, dest_file_name, volume_path, time_taken * 1000);
     }
 
     // Cleanup
@@ -190,8 +190,11 @@ void get_file(int argc, char** argv)
     }
     void* buffer = malloc(file_size);
     uint32_t bytes_read;
+    clock_t start_time = clock();
     result = fs_file_read(
         &volume, source_file_path, buffer, file_size, &bytes_read);
+    clock_t end_time = clock();
+    double time_taken = (double)(end_time - start_time) / CLOCKS_PER_SEC;
     if (result != FS_RESULT_OK)
     {
         fprintf(stderr, "Failed to read file from volume: %s\n",
@@ -212,8 +215,8 @@ void get_file(int argc, char** argv)
         exit(1);
     }
     fwrite(buffer, 1, bytes_read, dest_file);
-    printf("Read %u bytes from %s in volume %s\n", bytes_read,
-        source_file_path, volume_path);
+    printf("Read %u bytes from %s in volume %s (took %.2f ms)\n", bytes_read,
+        source_file_path, volume_path, time_taken * 1000);
 
     // Cleanup
     free(buffer);
@@ -389,9 +392,8 @@ void dump_map(int argc, char** argv)
     printf("File Legend:\n");
     for (int i = 0; i < dump.file_count; i++)
     {
-        printf(" * \x1b[38;2;%u;%u;%um%s\x1b[0m (",
-            (colors[i] >> 16) & 0xFF, (colors[i] >> 8) & 0xFF,
-            colors[i] & 0xFF, dump.file_names[i]);
+        printf(" * \x1b[38;2;%u;%u;%um%s\x1b[0m (", (colors[i] >> 16) & 0xFF,
+            (colors[i] >> 8) & 0xFF, colors[i] & 0xFF, dump.file_names[i]);
         print_size(dump.file_sizes[i]);
         printf(")\n");
     }

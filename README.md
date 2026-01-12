@@ -1,0 +1,141 @@
+# LFFS - Lightweight File System
+
+A minimal, purpose-built file system implementation written in C, loosely inspired by FAT (File Allocation Table) file systems. LFFS provides essential file system operations with a simple, efficient architecture optimized for embedded systems and educational use.
+
+## Overview
+
+LFFS is a lightweight file system that manages files in a volume using a File Link Table (FLT) for block allocation and chains, similar in concept to FAT but with a simplified design. The implementation includes:
+
+- **Superblock management** with metadata about the volume
+- **File entry structures** for storing file information
+- **File Link Table** for tracking block chains
+- **Data blocks** for storing file content
+- **Command-line interface** for file operations
+
+## Features
+
+- **Create & Delete Volumes** - Initialize new file systems with configurable block sizes
+- **File Operations** - Put, get, remove, and list files
+- **Block Management** - Efficient allocation and deallocation of data blocks
+- **Chain Tracking** - File Link Table tracks block chains for fragmented files
+- **Error Handling** - Comprehensive error codes and diagnostics
+- **Testing Suite** - Automated test and torture scripts
+
+## Building the Project
+
+The project uses CMake for building:
+
+```bash
+mkdir build
+cd build
+cmake ..
+make
+```
+
+This will produce the `fs` executable in the build directory.
+
+## Usage
+
+### Basic Commands
+
+```bash
+# Create a new volume with 1024-byte blocks and 65536 bytes total
+./fs create_volume <path> <block_size> <bytes>
+
+# List files in a volume
+./fs ls <volume>
+
+# Put a file into the volume
+./fs put <volume> <src> <dst>
+
+# Get a file from the volume
+./fs get <volume> <src> <dst>
+
+# Remove a file from the volume
+./fs rm <volume> <filename>
+
+# Delete a volume
+./fs delete_volume <path>
+
+# Dump the file block map
+./fs dump_map <volume>
+```
+
+## Testing
+
+### Basic Test Suite
+
+Run the basic test script to verify core functionality:
+
+```bash
+./scripts/test.sh [block_size]
+```
+
+The test script:
+- Creates a test volume
+- Writes and reads multiple files
+- Verifies file integrity with MD5 checksums
+- Tests fragmentation handling
+- Tests capacity limits
+- Cleans up test files
+
+Default block size is 1024 bytes; specify an alternative as an argument.
+
+### Stress Testing
+
+Run the torture test for robustness validation:
+
+```bash
+./scripts/torture.sh <max_file_size> <block_size> <volume_bytes> <num_operations>
+```
+
+Example:
+```bash
+./scripts/torture.sh 10000 4096 1000000 1000
+```
+
+The torture test:
+- Generates random files
+- Performs random put/delete operations
+- Tracks all operations in a database
+- Verifies integrity and consistency
+- Tests the file system under load
+
+## Design Philosophy
+
+### FAT-Inspired Architecture
+
+LFFS draws inspiration from traditional FAT (File Allocation Table) file systems, which have proven their simplicity and reliability across decades of use. Like FAT, LFFS uses a table-based allocation strategy where:
+
+- **Block chains** are tracked via a link table (similar to FAT's cluster chains)
+- **Free block management** uses reserved sentinel values
+- **Files can fragment** across non-contiguous blocks
+- **Metadata** is kept minimal and efficient
+
+However, LFFS simplifies the FAT model by:
+- Using a single unified link table for all blocks (no separate FAT copies)
+- Eliminating file name hierarchies (flat file structure)
+- Removing complex directory entries
+- Reducing per-file metadata overhead
+
+### Extensibility & Future Enhancements
+
+The LFFS design includes strategic reserved fields and extensible structures to accommodate future enhancements:
+
+- **SuperBlock reserved fields** - Five 32-bit reserved fields available for future metadata or feature flags
+- **FileEntry extra_inode_count** - Field reserved for extended attributes or additional metadata per file
+- **Configurable block sizes** - Support for different block sizes enables tuning for various use cases
+- **FLT sentinel values** - Additional special values can be defined without breaking existing code
+
+This forward-looking design allows LFFS to evolve with new capabilities such as:
+- File permissions and access control
+- File timestamps and version information
+- Compression or encryption support
+- Directory hierarchies and subdirectories
+- Extended file attributes and metadata
+
+The modular architecture ensures that new features can be added without breaking compatibility with existing implementations.
+
+## License
+
+This project is provided as-is for educational and embedded system use.
