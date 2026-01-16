@@ -118,23 +118,6 @@ However, LFFS simplifies the FAT model by:
 - Removing complex directory entries
 - Reducing per-file metadata overhead
 
-### Extensibility & Future Enhancements
-
-The LFFS design includes strategic reserved fields and extensible structures to accommodate future enhancements:
-
-- **SuperBlock reserved fields** - Five 32-bit reserved fields available for future metadata or feature flags
-- **FileEntry extra_inode_count** - Field reserved for extended attributes or additional metadata per file
-- **Configurable block sizes** - Support for different block sizes enables tuning for various use cases
-- **FLT sentinel values** - Additional special values can be defined without breaking existing code
-
-This forward-looking design allows LFFS to evolve with new capabilities such as:
-- File permissions and access control
-- File timestamps and version information
-- Compression or encryption support
-- Directory hierarchies and subdirectories
-- Extended file attributes and metadata
-
-The modular architecture ensures that new features can be added without breaking compatibility with existing implementations.
 
 ## License
 

@@ -44,7 +44,7 @@ typedef struct
 {
     uint8_t magic;              // File entry magic number
     uint8_t flags;              // File entry flags
-    uint8_t extra_inode_count;  // Reserved for future use
+    uint8_t extra_entry_count;  // Reserved for future use
     char name[21];              // File name
     uint32_t data_block_index;  // Index of the first data block
     uint32_t data_byte_count;   // Number of bytes in the data
