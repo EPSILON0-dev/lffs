@@ -12,6 +12,59 @@ LFFS is a lightweight file system that manages files in a volume using a File Li
 - **Data blocks** for storing file content
 - **Command-line interface** for file operations
 
+### On-disk Layout
+
+```
+ Byte 0
+  |
+  v
+╔══════════════════════════════════════════╗
+║              SUPERBLOCK                  ║
+╠══════════════════════════════════════════╣
+║  magic[4]          "LFFS"                ║
+║  version[4]        "0001"                ║
+║  data_block_size   u32                   ║
+║  data_block_count  u32                   ║
+║  flt_offset        u64  ----------------------> FLT (see below)
+║  data_block_offset u64  ----------------------> Data Blocks (see below)
+║  flt_entry_count   u32                   ║
+║  root_block_index  u32                   ║
+║  flags             u32                   ║
+║  reserved[5]                             ║
+╠══════════════════════════════════════════╣  <-- flt_offset
+║         FILE LINK TABLE (FLT)            ║
+║         (4 bytes per entry)              ║
+╠══════════════════════════════════════════╣
+║  [0]: 0x7FFFFFFF  END_OF_CHAIN           ║   root directory block
+║  [1]: 0x00000003  next = block 3   ---------. \
+║  [2]: 0xFFFFFFFF  FREE                   ║  │  file A: block 1 -> block 3
+║  [3]: 0x7FFFFFFF  END_OF_CHAIN    <---------'
+║  [4]: 0x00000000  DELETED                ║
+║  ...                                     ║
+╠══════════════════════════════════════════╣  <-- data_block_offset (block-aligned)
+║         DATA BLOCK 0  (root dir)         ║   root_block_index = 0
+╠══════════════════════════════════════════╣
+║  +------------------------------------+  ║
+║  │ FS_FileEntry (32 bytes each)       │  ║
+║  │  magic(1) │ flags(1) │ name[21]    │  ║
+║  │  data_block_index(u32)             │  ║
+║  │  data_byte_count(u32)              │  ║
+║  │------------------------------------│  ║
+║  │ FS_FileEntry ...                   │  ║
+║  +------------------------------------+  ║
+╠══════════════════════════════════════════╣
+║         DATA BLOCK 1  (file data)        ║   FLT[1] -> block 3
+║  [ raw bytes ... ]                       ║
+╠══════════════════════════════════════════╣
+║         DATA BLOCK 2  (free)             ║   FLT[2] = FREE
+╠══════════════════════════════════════════╣
+║         DATA BLOCK 3  (file data cont.)  ║   FLT[3] = END_OF_CHAIN
+║  [ raw bytes (continued) ... ]           ║
+╠══════════════════════════════════════════╣
+║         ...                              ║
+╚══════════════════════════════════════════╝ EOF
+```
+
 ## Features
 
 - **Create & Delete Volumes** - Initialize new file systems with configurable block sizes
@@ -121,4 +174,4 @@ However, LFFS simplifies the FAT model by:
 
 ## License
 
-This project is provided as-is for educational and embedded system use.
+MIT — see [LICENSE](LICENSE).
